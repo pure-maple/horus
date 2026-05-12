@@ -199,6 +199,15 @@ impl UsageSegment {
     }
 
     fn get_proxy_from_settings() -> Option<String> {
+        // Process env wins — covers WSL / shell-exported proxies that aren't in settings.json
+        for var in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+            if let Ok(v) = std::env::var(var) {
+                if !v.is_empty() {
+                    return Some(v);
+                }
+            }
+        }
+
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .ok()?;
@@ -207,7 +216,6 @@ impl UsageSegment {
         let content = std::fs::read_to_string(&settings_path).ok()?;
         let settings: serde_json::Value = serde_json::from_str(&content).ok()?;
 
-        // Try HTTPS_PROXY first, then HTTP_PROXY
         settings
             .get("env")?
             .get("HTTPS_PROXY")

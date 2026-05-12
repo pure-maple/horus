@@ -56,9 +56,19 @@ impl StatusLineGenerator {
         }
     }
 
-    /// Get terminal width, falling back to a generous default.
+    /// Get terminal width. Default: never truncate (9999) — show all segments, let CC TUI
+    /// wrap if it needs to. CC invokes statusline through a pipe so crossterm-detected width
+    /// is the CC inner width, not the window, and aggressive truncation drops useful segments.
+    /// Set HORUS_WIDTH=<n> to opt into width-based truncation.
     fn terminal_width() -> usize {
-        crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(120)
+        if let Ok(s) = std::env::var("HORUS_WIDTH") {
+            if let Ok(w) = s.parse::<usize>() {
+                if w > 0 {
+                    return w;
+                }
+            }
+        }
+        9999
     }
 
     /// Join rendered segments using the configured separator style.
