@@ -152,7 +152,7 @@ impl PreviewComponent {
                     metadata: HashMap::new(),
                 },
                 SegmentId::CodexUsage => SegmentData {
-                    primary: "5h 0% · 7d 11%".to_string(),
+                    primary: "5h 15%(40%) · 7d 87%(52%) ~1.3d".to_string(),
                     secondary: "@4-16 14".to_string(),
                     metadata: HashMap::new(),
                 },

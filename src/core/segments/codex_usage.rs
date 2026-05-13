@@ -1,5 +1,7 @@
+use super::usage::UsageSegment;
 use super::{Segment, SegmentData};
 use crate::config::{InputData, SegmentId};
+use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -44,10 +46,28 @@ impl CodexUsageSegment {
 
 #[derive(Debug)]
 struct CodexRateLimits {
-    primary_used: f64,   // 0.0 - 1.0
+    primary_used: f64,   // already in 0-100 range
+    primary_window_minutes: Option<u64>,
     primary_resets_at: Option<i64>,
-    secondary_used: f64, // 0.0 - 1.0
+    secondary_used: f64,
+    secondary_window_minutes: Option<u64>,
     secondary_resets_at: Option<i64>,
+}
+
+fn ts_to_rfc3339(ts: Option<i64>) -> Option<String> {
+    ts.and_then(|t| DateTime::<Utc>::from_timestamp(t, 0))
+        .map(|dt| dt.to_rfc3339())
+}
+
+fn window_label(d: Duration) -> String {
+    let mins = d.num_minutes();
+    if mins < 60 {
+        format!("{}m", mins)
+    } else if mins < 1440 {
+        format!("{}h", mins / 60)
+    } else {
+        format!("{}d", mins / 1440)
+    }
 }
 
 fn collect_jsonl_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
@@ -98,20 +118,24 @@ fn extract_rate_limits(val: &serde_json::Value) -> Option<CodexRateLimits> {
     let secondary = rl.get("secondary").filter(|v| !v.is_null());
 
     let primary_used = primary.get("used_percent")?.as_f64()?;
+    let primary_window = primary.get("window_minutes").and_then(|v| v.as_u64());
     let primary_resets = primary.get("resets_at").and_then(|v| v.as_i64());
 
-    let (secondary_used, secondary_resets) = match secondary {
+    let (secondary_used, secondary_window, secondary_resets) = match secondary {
         Some(s) => (
             s.get("used_percent").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            s.get("window_minutes").and_then(|v| v.as_u64()),
             s.get("resets_at").and_then(|v| v.as_i64()),
         ),
-        None => (0.0, None),
+        None => (0.0, None, None),
     };
 
     Some(CodexRateLimits {
         primary_used,
+        primary_window_minutes: primary_window,
         primary_resets_at: primary_resets,
         secondary_used,
+        secondary_window_minutes: secondary_window,
         secondary_resets_at: secondary_resets,
     })
 }
@@ -120,11 +144,46 @@ impl Segment for CodexUsageSegment {
     fn collect(&self, _input: &InputData) -> Option<SegmentData> {
         let rl = Self::find_latest_rate_limits()?;
 
-        // used_percent is already 0-100 range
-        let hourly_pct = rl.primary_used.round() as u8;
-        let weekly_pct = rl.secondary_used.round() as u8;
+        let primary_duration = rl
+            .primary_window_minutes
+            .map(|m| Duration::minutes(m as i64))
+            .unwrap_or_else(|| Duration::hours(5));
+        let secondary_duration = rl
+            .secondary_window_minutes
+            .map(|m| Duration::minutes(m as i64))
+            .unwrap_or_else(|| Duration::days(7));
 
-        let primary = format!("5h {}% · 7d {}%", hourly_pct, weekly_pct);
+        let primary_resets_str = ts_to_rfc3339(rl.primary_resets_at);
+        let secondary_resets_str = ts_to_rfc3339(rl.secondary_resets_at);
+
+        let primary_pace =
+            UsageSegment::calc_budget_pace(primary_resets_str.as_deref(), primary_duration);
+        let secondary_pace =
+            UsageSegment::calc_budget_pace(secondary_resets_str.as_deref(), secondary_duration);
+        let secondary_ttl = UsageSegment::calc_time_to_limit(
+            rl.secondary_used,
+            secondary_resets_str.as_deref(),
+            secondary_duration,
+        );
+
+        let primary_label = window_label(primary_duration);
+        let secondary_label = window_label(secondary_duration);
+        let primary_pct = rl.primary_used.round() as u8;
+        let secondary_pct = rl.secondary_used.round() as u8;
+
+        let primary_part = match primary_pace {
+            Some(p) => format!("{} {}%({}%)", primary_label, primary_pct, p),
+            None => format!("{} {}%", primary_label, primary_pct),
+        };
+        let mut secondary_part = match secondary_pace {
+            Some(p) => format!("{} {}%({}%)", secondary_label, secondary_pct, p),
+            None => format!("{} {}%", secondary_label, secondary_pct),
+        };
+        if let Some(ref t) = secondary_ttl {
+            secondary_part.push_str(&format!(" {}", t));
+        }
+
+        let primary = format!("{} · {}", primary_part, secondary_part);
 
         let secondary = match rl.secondary_resets_at {
             Some(ts) => {
