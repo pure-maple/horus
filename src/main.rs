@@ -41,8 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration
     let mut config = Config::load().unwrap_or_else(|_| Config::default());
 
-    // Apply theme override if provided
+    // Apply theme override if provided. Also expose the active theme via env
+    // so segment::collect() (which loads config independently) can honor
+    // theme-specific options like bar_cells.
     if let Some(theme) = cli.theme {
+        std::env::set_var("HORUS_ACTIVE_THEME", &theme);
         config = horus::ui::themes::ThemePresets::get_theme(&theme);
     }
 

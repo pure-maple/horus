@@ -40,17 +40,21 @@ pub fn render_progress_bar(percent: u8, cells: usize) -> String {
 }
 
 /// Read `bar_cells` from a segment's [segments.options] (default 0 = no bar).
+/// Honors `HORUS_ACTIVE_THEME` env var (set by main.rs when `-t` is passed)
+/// so theme profiles can override per-segment options like bar_cells.
 pub fn read_bar_cells(segment_id: SegmentId) -> usize {
-    crate::config::Config::load()
-        .ok()
-        .and_then(|cfg| {
-            cfg.segments
-                .iter()
-                .find(|s| s.id == segment_id)
-                .and_then(|sc| sc.options.get("bar_cells"))
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize)
-        })
+    let cfg = if let Ok(theme) = std::env::var("HORUS_ACTIVE_THEME") {
+        crate::ui::themes::ThemePresets::get_theme(&theme)
+    } else {
+        crate::config::Config::load().unwrap_or_default()
+    };
+
+    cfg.segments
+        .iter()
+        .find(|s| s.id == segment_id)
+        .and_then(|sc| sc.options.get("bar_cells"))
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
         .unwrap_or(0)
 }
 
